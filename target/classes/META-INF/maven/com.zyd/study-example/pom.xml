@@ -3,4 +3,17 @@
   <groupId>com.zyd</groupId>
   <artifactId>study-example</artifactId>
   <version>0.0.1-SNAPSHOT</version>
+  
+  
+  
+  
+     <!-- https://mvnrepository.com/artifact/io.netty/netty-all -->
+    <dependencies>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>4.1.5.Final</version>
+        </dependency>
+    </dependencies>
+  
 </project>
