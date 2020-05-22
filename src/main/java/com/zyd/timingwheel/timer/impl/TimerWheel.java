@@ -53,6 +53,7 @@ public class TimerWheel implements Timer {
     private final long tickDuration;
     //时间轮的基本底层结构
     private final HashedWheelBucket[] wheel;
+    //这是一个标示符，用来快速计算任务应该呆的格子。2的n次方减1，后几位全是1，用于位运算
     private final int mask;
     private final CountDownLatch startTimeInitialized = new CountDownLatch(1);
     private final Queue<HashedWheelTimeout> timeouts = PlatformDependent.newMpscQueue();
@@ -183,11 +184,13 @@ public class TimerWheel implements Timer {
         this.tickDuration = unit.toNanos(tickDuration);
 
         // Prevent overflow.
+        //检测是否溢出，也就是超过最大值
         if (this.tickDuration >= Long.MAX_VALUE / wheel.length) {
             throw new IllegalArgumentException(String.format(
                     "tickDuration: %d (expected: 0 < tickDuration in nanos < %d",
                     tickDuration, Long.MAX_VALUE / wheel.length));
         }
+        //将worker包装成thread
         workerThread = threadFactory.newThread(worker);
 
         leak = leakDetection || !workerThread.isDaemon() ? leakDetector.open(this) : null;
@@ -227,8 +230,10 @@ public class TimerWheel implements Timer {
      *                               {@linkplain #stop() stopped} already
      */
     public void start() {
+    	//workerState一开始的时候是0（WORKER_STATE_INIT），然后才会设置为1（WORKER_STATE_STARTED）
         switch (WORKER_STATE_UPDATER.get(this)) {
             case WORKER_STATE_INIT:
+            	//使用cas来获取启动调度的权力，只有竞争到的线程允许来进行实例启动
                 if (WORKER_STATE_UPDATER.compareAndSet(this, WORKER_STATE_INIT, WORKER_STATE_STARTED)) {
                     workerThread.start();
                 }
@@ -240,7 +245,7 @@ public class TimerWheel implements Timer {
             default:
                 throw new Error("Invalid WorkerState");
         }
-
+        // 等待worker线程初始化时间轮的启动时间
         // Wait until the startTime is initialized by the worker.
         while (startTime == 0) {
             try {
@@ -299,12 +304,16 @@ public class TimerWheel implements Timer {
         if (unit == null) {
             throw new NullPointerException("unit");
         }
+        //如果时间轮没有启动，则启动
         start();
 
         // Add the timeout to the timeout queue which will be processed on the next tick.
         // During processing all the queued HashedWheelTimeouts will be added to the correct HashedWheelBucket.
         long deadline = System.nanoTime() + unit.toNanos(delay) - startTime;
+        // 这里定时任务不是直接加到对应的格子中，而是先加入到一个队列里，然后等到下一个tick的时候，
+        // 会从队列里取出最多100000个任务加入到指定的格子中
         HashedWheelTimeout timeout = new HashedWheelTimeout(this, task, deadline, argv);
+        //Worker会去处理timeouts队列里面的数据
         timeouts.add(timeout);
         return timeout;
     }
@@ -322,21 +331,26 @@ public class TimerWheel implements Timer {
                 // We use 0 as an indicator for the uninitialized value here, so make sure it's not 0 when initialized.
                 startTime = 1;
             }
-
+            //时间已经初始化好了，HashedWheelTimer的start方法会继续往下运行
             // Notify the other threads waiting for the initialization at start().
             startTimeInitialized.countDown();
 
             do {
+                //返回的是当前的nanoTime- startTime
                 final long deadline = waitForNextTick();
                 if (deadline > 0) {
+                	//得到槽位值，轮数和mash的位运算（也就是超出mask位数的舍弃）
                     int idx = (int) (tick & mask);
+                    // 从bucket中移除timeout
                     processCancelledTasks();
                     HashedWheelBucket bucket =
                             wheel[idx];
+                    //移除cancelledTimeouts中的任务到bucket
                     transferTimeoutsToBuckets();
                     bucket.expireTimeouts(deadline);
                     tick++;
                 }
+            //校验如果workerState是started状态，那么就一直循环
             } while (WORKER_STATE_UPDATER.get(TimerWheel.this) == WORKER_STATE_STARTED);
 
             // Fill the unprocessedTimeouts so we can return them from stop() method.
@@ -348,6 +362,7 @@ public class TimerWheel implements Timer {
                 if (timeout == null) {
                     break;
                 }
+                //如果有没有被处理的timeout，那么加入到unprocessedTimeouts对列中
                 if (!timeout.isCancelled()) {
                     unprocessedTimeouts.add(timeout);
                 }
