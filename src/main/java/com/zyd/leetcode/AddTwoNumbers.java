@@ -45,10 +45,8 @@ public class AddTwoNumbers {
     			curNum = (curNum)%10;
     			isAddOne = true;
     		}
-    		curNode = new ListNode(curNum);
     		if (result == null) {
-    			result = new ListNode(curNum);
-    			result.next = curNode;
+    			result = curNode = new ListNode(curNum);
     		} else {
     			ListNode node = new ListNode(curNum);
     			curNode = curNode.next =node;
